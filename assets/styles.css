@@ -1589,6 +1589,12 @@ h1, h2, h3, h4 {
 /* =========================================================
    响应式
    ========================================================= */
+/* 屏幕窄或矮时，hero 底部空间不足以同时容纳按钮与"向下浏览"提示，
+   隐去提示，避免它与按钮挤在一起 */
+@media (max-width: 900px), (max-height: 720px) {
+  .scroll-cue { display: none; }
+}
+
 @media (max-width: 1080px) {
   .profile-layout { grid-template-columns: 1fr; }
   .admin-grid { grid-template-columns: 1fr; }
