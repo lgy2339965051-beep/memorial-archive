@@ -472,6 +472,18 @@
       setPubStatus("还没有填 GitHub 令牌", true);
       return;
     }
+    if (window.APP && window.APP.confirm) {
+      window.APP.confirm(
+        "用线上内容覆盖这台设备？",
+        "这台设备上还没发布的修改（比如刚加的照片）会被线上版本覆盖，覆盖后找不回来。确定继续吗？",
+        function () { doPull(c); }
+      );
+      return;
+    }
+    doPull(c);
+  }
+
+  function doPull(c) {
     setPubStatus("正在读取线上内容…");
     ghFetch(c, contentsUrl(c) + "?ref=" + encodeURIComponent(c.branch))
       .then(function (res) {
