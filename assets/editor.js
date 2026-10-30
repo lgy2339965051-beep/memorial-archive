@@ -268,9 +268,250 @@
     );
   }
 
+  /* ---------------- 发布到线上（GitHub Contents API） ---------------- */
+
+  var PUB_KEY = "memorial-archive-publish";
+  var PUB_DEFAULT = { owner: "lgy2339965051-beep", repo: "memorial-archive", branch: "main" };
+
+  function pubCfg() {
+    var d = {};
+    try { d = JSON.parse(localStorage.getItem(PUB_KEY) || "{}") || {}; } catch (e) { d = {}; }
+    return {
+      owner: d.owner || PUB_DEFAULT.owner,
+      repo: d.repo || PUB_DEFAULT.repo,
+      branch: d.branch || PUB_DEFAULT.branch,
+      token: d.token || "",
+      auto: !!d.auto,
+      pushed: d.pushed || ""
+    };
+  }
+
+  function setPubCfg(c) {
+    try { localStorage.setItem(PUB_KEY, JSON.stringify(c)); return true; } catch (e) { return false; }
+  }
+
+  function readPubForm() {
+    var c = pubCfg();
+    var q = function (k) {
+      var el = document.querySelector('[data-pub="' + k + '"]');
+      return el ? String(el.value || "").trim() : "";
+    };
+    var parts = q("repo-path").split("/");
+    var autoEl = document.querySelector('[data-pub="auto"]');
+    return {
+      owner: (parts[0] || c.owner).trim(),
+      repo: (parts[1] || c.repo).trim(),
+      branch: q("branch") || c.branch,
+      token: q("token") || c.token,
+      auto: autoEl ? !!autoEl.checked : c.auto,
+      pushed: c.pushed
+    };
+  }
+
+  function seedText() {
+    var head =
+      "/* =========================================================\n" +
+      "   站点数据（由后台「发布到线上」自动生成）\n" +
+      "   覆盖本项目 assets/data.js，线上即为这份内容。\n" +
+      "   ========================================================= */\n\n";
+    return head + "window.SEED_DATA = " + S.exportJSON() + ";\n";
+  }
+
+  function b64utf8(str) {
+    var bytes = new TextEncoder().encode(str);
+    var bin = "";
+    var CH = 8192;
+    for (var i = 0; i < bytes.length; i += CH) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+    }
+    return btoa(bin);
+  }
+
+  function ghFetch(c, url, opts) {
+    opts = opts || {};
+    var headers = {
+      Authorization: "Bearer " + c.token,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json"
+    };
+    opts.headers = headers;
+    return fetch(url, opts).then(function (r) {
+      return r.text().then(function (t) {
+        var j = null;
+        try { j = JSON.parse(t); } catch (e) {}
+        return { ok: r.ok, status: r.status, body: j };
+      });
+    });
+  }
+
+  function ghMsg(res) {
+    if (res.status === 401) return "令牌无效或已过期（401）";
+    if (res.status === 403) return "令牌没有写入权限，或触发了频率限制（403）";
+    if (res.status === 404) return "找不到仓库，或令牌无权访问（404）";
+    if (res.status === 409) return "文件冲突，刷新页面后重试（409）";
+    if (res.body && res.body.message) return res.body.message + "（" + res.status + "）";
+    return "HTTP " + res.status;
+  }
+
+  function setPubStatus(text, bad) {
+    var el = document.getElementById("pub-status");
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = bad ? "#c96a5a" : "var(--gold)";
+  }
+
+  function contentsUrl(c) {
+    return (
+      "https://api.github.com/repos/" + encodeURIComponent(c.owner) + "/" +
+      encodeURIComponent(c.repo) + "/contents/assets/data.js"
+    );
+  }
+
+  function unb64utf8(b64) {
+    var bin = atob(b64);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+
+  function hashStr(s) {
+    var h = 2166136261 >>> 0;
+    for (var i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h.toString(16);
+  }
+
+  function publishNow(opts) {
+    opts = opts || {};
+    var quiet = !!opts.quiet;
+    var c = pubCfg();
+    if (!c.token) {
+      setPubStatus("还没有填 GitHub 令牌", true);
+      if (!quiet) toast("先在下面填入 GitHub 令牌");
+      return Promise.resolve({ ok: false, msg: "no-token" });
+    }
+    var base = contentsUrl(c);
+    var local = seedText();
+    var localHash = hashStr(local);
+
+    setPubStatus("正在发布…");
+
+    var doPut = function (sha) {
+      var payload = {
+        message: "更新站点内容 · " + new Date().toLocaleString("zh-CN"),
+        content: b64utf8(local),
+        branch: c.branch
+      };
+      if (sha) payload.sha = sha;
+      return ghFetch(c, base, { method: "PUT", body: JSON.stringify(payload) }).then(function (res) {
+        if (!res.ok) throw new Error(ghMsg(res));
+        var cfg = pubCfg();
+        cfg.pushed = localHash;
+        setPubCfg(cfg);
+        setPubStatus("已提交 · " + new Date().toLocaleTimeString("zh-CN") + " · 约 1 分钟后线上生效");
+        if (!quiet) toast("已发布，约 1 分钟后线上更新");
+        return { ok: true };
+      });
+    };
+
+    return ghFetch(c, base + "?ref=" + encodeURIComponent(c.branch))
+      .then(function (res) {
+        if (!res.ok && res.status !== 404) throw new Error(ghMsg(res));
+        var sha = res.body && res.body.sha;
+        var remoteHash = null;
+        if (res.ok && res.body && res.body.content) {
+          try {
+            remoteHash = hashStr(unb64utf8(String(res.body.content).replace(/\s+/g, "")));
+          } catch (e) {
+            remoteHash = null;
+          }
+        }
+        var conflict = !!(c.pushed && remoteHash && remoteHash !== c.pushed);
+
+        if (conflict && quiet) {
+          setPubStatus("线上已有别的设备发布的新版本，本次自动发布已跳过", true);
+          return { ok: false, msg: "conflict" };
+        }
+        if (conflict) {
+          return new Promise(function (resolve) {
+            window.APP.confirm(
+              "线上内容比这台设备的更新",
+              "可能你在手机或另一台电脑上改过并发布了。继续发布会用当前内容覆盖它，那边的改动会丢失。建议先点「从线上读取最新内容」。仍然继续吗？",
+              function () {
+                doPut(sha).then(resolve).catch(function (e) {
+                  resolve({ ok: false, msg: e.message });
+                });
+              }
+            );
+          });
+        }
+        return doPut(sha);
+      })
+      .catch(function (e) {
+        var msg = e && e.message ? e.message : String(e);
+        setPubStatus("发布失败：" + msg, true);
+        if (!quiet) toast("发布失败：" + msg);
+        return { ok: false, msg: msg };
+      });
+  }
+
+  function pullFromRemote() {
+    var c = pubCfg();
+    if (!c.token) {
+      setPubStatus("还没有填 GitHub 令牌", true);
+      return;
+    }
+    setPubStatus("正在读取线上内容…");
+    ghFetch(c, contentsUrl(c) + "?ref=" + encodeURIComponent(c.branch))
+      .then(function (res) {
+        if (!res.ok) throw new Error(ghMsg(res));
+        var text = unb64utf8(String((res.body && res.body.content) || "").replace(/\s+/g, ""));
+        var m = text.match(/window\.SEED_DATA\s*=\s*([\s\S]*);\s*$/);
+        if (!m) throw new Error("线上文件格式无法识别");
+        var data = JSON.parse(m[1]);
+        S.importJSON(JSON.stringify(data));
+        var cfg = pubCfg();
+        cfg.pushed = hashStr(text);
+        setPubCfg(cfg);
+        setPubStatus("已同步线上内容 · " + new Date().toLocaleTimeString("zh-CN"));
+        toast("已读取线上最新内容");
+        if (window.APP) window.APP.rerender();
+      })
+      .catch(function (e) {
+        setPubStatus("读取失败：" + (e && e.message ? e.message : e), true);
+      });
+  }
+
+  function testConn() {
+    var c = pubCfg();
+    if (!c.token) { setPubStatus("还没有填 GitHub 令牌", true); return; }
+    setPubStatus("正在测试连接…");
+    fetch(
+      "https://api.github.com/repos/" + encodeURIComponent(c.owner) + "/" + encodeURIComponent(c.repo),
+      { headers: { Authorization: "Bearer " + c.token, Accept: "application/vnd.github+json" } }
+    )
+      .then(function (r) {
+        return r.json().then(function (j) {
+          if (r.ok) setPubStatus("连接正常 · " + (j.full_name || "") + " · 默认分支 " + (j.default_branch || ""));
+          else setPubStatus("连接失败：" + ghMsg({ status: r.status, body: j }), true);
+        });
+      })
+      .catch(function (e) {
+        setPubStatus("连接失败：" + (e.message || e), true);
+      });
+  }
+
+  function afterSave() {
+    var c = pubCfg();
+    if (c.auto && c.token) publishNow({ quiet: true });
+  }
+
   /* ---------------- 页面：数据 ---------------- */
 
   function dataTab() {
+    var pc = pubCfg();
     return (
       '<div class="hint-bar"><b>重要</b><span>数据存在这台电脑的浏览器里。换电脑、换浏览器、清理缓存都会丢失，所以定期点「下载备份文件」存一份 JSON 到硬盘上。</span></div>' +
       panel("备份与恢复",
@@ -287,6 +528,31 @@
         "· 图片上传后会被压缩并直接存进数据里，备份文件就包含所有照片，可以带到别的电脑。<br>" +
         "· 本地上传的视频体积大，存在浏览器本地库里，不会进入 JSON 备份；正式上线时建议改用 B 站 / 腾讯视频的外链。<br>" +
         "· 备份文件就是全站内容的原文，你也可以用文本编辑器直接改。" +
+        "</p>"
+      ) +
+      panel("直接发布到线上",
+        '<p style="color:var(--muted);font-size:12.5px;line-height:1.9;margin:0 0 16px">' +
+        "改完内容点「发布到线上」，约 1 分钟后线上更新；勾上自动发布则每次保存都会同步。令牌只在你填过的这台设备上有效，换设备要再填一次；<b style=\"color:var(--ivory-soft)\">换设备后请先点「从线上读取最新内容」</b>，否则会用旧草稿覆盖线上。" +
+        "</p>" +
+        field("仓库", '<input class="input" data-pub="repo-path" value="' + esc(pc.owner + "/" + pc.repo) + '" placeholder="用户名/仓库名">', "格式：用户名/仓库名") +
+        field("分支", '<input class="input" data-pub="branch" value="' + esc(pc.branch) + '" placeholder="main">') +
+        field("GitHub 令牌", '<input class="input" data-pub="token" type="password" value="' + esc(pc.token) + '" placeholder="github_pat_… 或 ghp_…">', "只存本机浏览器") +
+        '<label style="display:flex;align-items:center;gap:8px;margin:0 0 16px;color:var(--ivory-soft);font-size:13px;cursor:pointer">' +
+        '<input type="checkbox" data-pub="auto" ' + (pc.auto ? "checked" : "") + "> 每次保存后自动发布" +
+        "</label>" +
+        '<div class="admin-actions">' +
+        '<button class="btn btn--gold btn--sm" type="button" data-action="publish">发布到线上</button>' +
+        '<button class="btn btn--ghost btn--sm" type="button" data-action="save-pub">保存设置</button>' +
+        '<button class="btn btn--ghost btn--sm" type="button" data-action="test-pub">测试连接</button>' +
+        '<button class="btn btn--ghost btn--sm" type="button" data-action="pull-remote">从线上读取最新内容</button>' +
+        "</div>" +
+        '<p id="pub-status" style="font-size:12.5px;margin:0 0 12px;color:var(--gold)">' +
+        (pc.token ? "已配置 · " + esc(pc.owner + "/" + pc.repo) + " · " + esc(pc.branch) : "尚未配置令牌") +
+        "</p>" +
+        '<p style="color:var(--faint);font-size:12px;line-height:1.85;margin:0">' +
+        "· 令牌去 GitHub → Settings → Developer settings → Personal access tokens → Fine-grained token 生成，只授权这个仓库，权限勾 <b>Contents: Read and write</b>。<br>" +
+        "· 令牌只保存在你自己的浏览器里，不会写进网站代码。别人打开网站拿不到令牌，也就改不了你的内容。<br>" +
+        "· 内容里如果有本地上传的视频，线上会是空位；先换成 B 站 / 腾讯视频外链再发布。" +
         "</p>"
       ) +
       panel("直接编辑数据（高级）",
@@ -440,6 +706,7 @@
     }
     if (S.save()) {
       toast("已保存");
+      afterSave();
       location.hash = "#/admin?tab=members&id=" + m.id;
       if (window.APP) window.APP.rerender();
     } else {
@@ -454,6 +721,7 @@
     });
     S.save();
     toast("站点信息已保存");
+    afterSave();
     if (window.APP) window.APP.rerender();
   }
 
@@ -478,6 +746,7 @@
     }
     S.save();
     toast("已保存");
+    afterSave();
     location.hash = "#/admin?tab=timeline&id=" + e.id;
     if (window.APP) window.APP.rerender();
   }
@@ -566,6 +835,17 @@
         });
       }
 
+      if (action === "save-pub" || action === "publish" || action === "test-pub" || action === "pull-remote") {
+        setPubCfg(readPubForm());
+        if (action === "save-pub") toast("发布设置已保存");
+        if (action === "publish") publishNow({});
+        if (action === "test-pub") testConn();
+        if (action === "pull-remote") {
+          window.APP.confirm("用线上的内容覆盖本机？", "这台浏览器里未发布的改动会被替换掉。", pullFromRemote);
+        }
+        return;
+      }
+
       if (action === "export-json") {
         S.download("纪念档案-备份-" + new Date().toISOString().slice(0, 10) + ".json", S.exportJSON());
         toast("备份文件已开始下载");
@@ -612,6 +892,7 @@
         try {
           S.importJSON(ta.value);
           toast("已应用修改");
+          afterSave();
           if (window.APP) window.APP.rerender();
         } catch (err) {
           toast("JSON 格式有误：" + err.message);
