@@ -85,6 +85,7 @@
     return (
       '<div class="repeat-item" data-repeat="photo">' +
       '<div class="repeat-item__head"><span>影像 ' + (i + 1) + '</span><button type="button" class="repeat-item__del" data-action="del-repeat">×</button></div>' +
+      '<input type="hidden" data-sub="id" value="' + esc(p.id || "") + '">' +
       uploadBox("image", p.src, { field: "src", empty: "选择一张照片（会自动压缩）" }) +
       '<div class="field-row" style="margin-top:12px">' +
       field("标题", '<input class="input" data-sub="title" value="' + esc(p.title || "") + '" placeholder="巷子口的早晨">') +
@@ -101,6 +102,7 @@
     return (
       '<div class="repeat-item" data-repeat="video">' +
       '<div class="repeat-item__head"><span>视频 ' + (i + 1) + '</span><button type="button" class="repeat-item__del" data-action="del-repeat">×</button></div>' +
+      '<input type="hidden" data-sub="id" value="' + esc(v.id || "") + '">' +
       field("视频地址", '<input class="input" data-sub="src" value="' + esc(isLocal ? "" : v.src || "") + '" placeholder="B站 / 腾讯视频 / YouTube 链接，或 mp4 直链">', "贴链接") +
       '<div style="margin:-6px 0 14px;color:var(--faint);font-size:11px">或者从电脑里选一个视频文件（只存在本机浏览器，适合自己看）</div>' +
       uploadBox("video", isLocal ? v.src : "", { field: "src-file", empty: "选择本地视频文件" }) +
@@ -119,7 +121,7 @@
   function siteTab() {
     var s = S.state.data.site;
     return (
-      '<div class="hint-bar"><b>提示</b><span>这里改的是全站的名字、标题语和首页大图。填完点最下面的「保存站点信息」。</span></div>' +
+      '<div class="hint-bar"><b>提示</b><span>这里改的是全站的名字、标题语和首页大图。停下手 1 秒会自动保存，不用记着点按钮。</span></div>' +
       panel("站点信息",
         '<div class="field-row">' +
         field("站点名称", input("name", s.name, "纪念档案")) +
@@ -167,7 +169,7 @@
     var tagsValue = (m.tags || []).join("，");
 
     return (
-      '<div class="hint-bar"><b>' + (isNew ? "新建人物" : "编辑中：" + esc(m.name)) + '</b><span>标了「必填」的填上，其他可以以后慢慢补。改完记得点底部的保存。</span></div>' +
+      '<div class="hint-bar"><b>' + (isNew ? "新建人物" : "编辑中：" + esc(m.name)) + '</b><span>' + (isNew ? "填上姓名，点一次「保存这份档案」建好；之后每次改动都会自动保存。" : "改动会自动保存，不用点按钮。") + '</span></div>' +
 
       panel("基本资料",
         '<div class="field-row field-row--3">' +
@@ -410,8 +412,15 @@
         var cfg = pubCfg();
         cfg.pushed = localHash;
         setPubCfg(cfg);
-        setPubStatus("已提交 · " + new Date().toLocaleTimeString("zh-CN") + " · 约 1 分钟后线上生效");
-        if (!quiet) toast("已发布，约 1 分钟后线上更新");
+        var localVid = 0;
+        (S.state.data.members || []).forEach(function (m) {
+          (m.videos || []).forEach(function (v) {
+            if (v && String(v.src || "").indexOf("idb:") === 0) localVid++;
+          });
+        });
+        var tail = localVid ? "（含 " + localVid + " 个本机视频，别人看不到）" : "";
+        setPubStatus("已提交 · " + new Date().toLocaleTimeString("zh-CN") + " · 约 1 分钟后线上生效" + tail);
+        if (!quiet) toast("已发布，约 1 分钟后线上更新" + tail);
         return { ok: true };
       });
     };
@@ -524,7 +533,7 @@
         '<button class="btn btn--gold btn--sm" type="button" data-action="export-seed">导出为 data.js（上线用）</button>' +
         "</div>" +
         '<p style="color:var(--muted);font-size:12.5px;line-height:1.9;margin:0">' +
-        '· <b style="color:var(--ivory-soft)">要发布到网上时</b>：点「导出为 data.js」，得到的新文件覆盖本项目 assets/data.js，再整站上传。否则别人打开只能看到空白页面，因为数据默认只存在你自己的浏览器里。<br>' +
+        '· <b style="color:var(--ivory-soft)">日常更新</b>：改完内容会自动保存到这台电脑的浏览器，点下面「直接发布到线上」的「发布到线上」（或勾上自动发布）才会同步到网站上。<br>' +
         "· 图片上传后会被压缩并直接存进数据里，备份文件就包含所有照片，可以带到别的电脑。<br>" +
         "· 本地上传的视频体积大，存在浏览器本地库里，不会进入 JSON 备份；正式上线时建议改用 B 站 / 腾讯视频的外链。<br>" +
         "· 备份文件就是全站内容的原文，你也可以用文本编辑器直接改。" +
@@ -567,6 +576,7 @@
   /* ---------------- 主渲染 ---------------- */
 
   function render(route) {
+    curRoute = route;
     var tab = route.query.tab || "members";
     var tabs = [
       { k: "members", l: "人物" },
@@ -616,6 +626,7 @@
       }).join("") +
       "</div>" +
       content +
+      '<div class="autosave-note" id="autosave-note" hidden></div>' +
       "</div>"
     );
   }
@@ -660,14 +671,15 @@
     });
   }
 
-  function saveMember(id) {
+  /* 把表单内容写进 state，不保存、不跳转、不提示（自动保存与手动保存共用） */
+  function applyMember(id) {
     var d = S.state.data;
     var isNew = !id;
     var m = isNew ? {} : S.getMember(id);
-    if (!m) return;
+    if (!m) return null;
 
     var name = getVal("name");
-    if (!name) { toast("姓名不能为空"); return; }
+    if (!name) return null;
 
     m.name = name;
     m.alias = getVal("alias");
@@ -699,10 +711,20 @@
       return v;
     });
 
-    if (isNew) {
+    return { member: m, isNew: isNew };
+  }
+
+  function saveMember(id) {
+    var r = applyMember(id);
+    if (!r) {
+      toast(id ? "姓名不能为空" : "先填个姓名再保存");
+      return;
+    }
+    var m = r.member;
+    if (r.isNew) {
       m.id = S.uid("m");
-      d.members.push(m);
-      S.normalize(d);
+      S.state.data.members.push(m);
+      S.normalize(S.state.data);
     }
     if (S.save()) {
       toast("已保存");
@@ -714,22 +736,27 @@
     }
   }
 
-  function saveSite() {
+  function applySite() {
     var s = S.state.data.site;
     ["name", "en", "est", "location", "motto", "lede", "footerNote", "heroImage", "watermark"].forEach(function (k) {
       s[k] = getVal(k);
     });
+    return true;
+  }
+
+  function saveSite() {
+    applySite();
     S.save();
     toast("站点信息已保存");
     afterSave();
     if (window.APP) window.APP.rerender();
   }
 
-  function saveEvent(id) {
+  function applyEvent(id) {
     var d = S.state.data;
     var isNew = !id;
     var e = isNew ? {} : d.events.filter(function (x) { return x.id === id; })[0];
-    if (!e) return;
+    if (!e) return null;
     e.year = getVal("year") || String(getVal("date") || "").slice(0, 4);
     e.date = getVal("date") || e.year;
     e.title = getVal("title");
@@ -739,10 +766,17 @@
     e.memberIds = Array.prototype.map.call(document.querySelectorAll("[data-member]"), function (el) {
       return el.checked ? el.getAttribute("data-member") : null;
     }).filter(Boolean);
-    if (!e.title) { toast("标题不能为空"); return; }
-    if (isNew) {
+    if (!e.title) return null;
+    return { event: e, isNew: isNew };
+  }
+
+  function saveEvent(id) {
+    var r = applyEvent(id);
+    if (!r) { toast("标题不能为空"); return; }
+    var e = r.event;
+    if (r.isNew) {
       e.id = S.uid("e");
-      d.events.push(e);
+      S.state.data.events.push(e);
     }
     S.save();
     toast("已保存");
@@ -755,16 +789,131 @@
     if (window.APP) window.APP.toast(msg);
   }
 
+  /* ---------------- 自动保存 ---------------- */
+
+  var curRoute = null;     // 当前后台路由，由 render 写入
+  var saveTimer = null;    // 防抖：写草稿
+  var pubTimer = null;     // 防抖：自动发布
+  var publishing = false;  // 是否有发布正在进行
+
+  function clock() {
+    return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  var noteTimer = null;
+
+  function setNote(text, kind) {
+    var el = document.getElementById("autosave-note");
+    if (!el) return;
+    clearTimeout(noteTimer);
+    if (!text) { el.hidden = true; el.textContent = ""; return; }
+    el.hidden = false;
+    el.textContent = text;
+    el.className = "autosave-note" + (kind === "bad" ? " is-bad" : kind === "ok" ? " is-ok" : "");
+    if (kind === "ok") {
+      // 成功提示停留几秒后自动消失，不遮挡内容
+      noteTimer = setTimeout(function () {
+        var e2 = document.getElementById("autosave-note");
+        if (e2 && e2.textContent === text) e2.hidden = true;
+      }, 3600);
+    }
+  }
+
+  /* 当前正在编辑的对象。返回 null 表示这一页没有可自动保存的对象 */
+  function editTarget() {
+    var q = (curRoute && curRoute.query) || {};
+    var tab = q.tab || "members";
+    var id = q.id || "";
+    if (tab === "site") return { kind: "site" };
+    if (tab === "timeline") return id && id !== "new" ? { kind: "event", id: id } : null;
+    if (tab === "data") return null;
+    return id && id !== "new" ? { kind: "member", id: id } : null;
+  }
+
+  function applyTarget(t) {
+    if (!t) return false;
+    if (t.kind === "site") return applySite();
+    if (t.kind === "member") return !!applyMember(t.id);
+    if (t.kind === "event") return !!applyEvent(t.id);
+    return false;
+  }
+
+  function schedulePublish(delay) {
+    clearTimeout(pubTimer);
+    pubTimer = setTimeout(function () {
+      var c = pubCfg();
+      if (!c.auto || !c.token) return;
+      if (publishing) { schedulePublish(3000); return; }
+      if (hashStr(seedText()) === c.pushed) {
+        setNote("已自动保存 " + clock() + " · 内容与线上一致", "ok");
+        return;
+      }
+      publishing = true;
+      setNote("正在自动发布…");
+      publishNow({ quiet: true }).then(function (r) {
+        publishing = false;
+        if (r && r.ok) {
+          setNote("已自动发布 " + clock() + " · 约 1 分钟后线上生效", "ok");
+        } else if (r && r.msg === "conflict") {
+          setNote("已保存到本机，但线上有别的设备发布的新版本，自动发布已跳过", "bad");
+        } else {
+          setNote("已保存到本机，自动发布未成功：" + ((r && r.msg) || "网络问题") + "，可点「发布到线上」重试", "bad");
+        }
+      });
+    }, delay || 3500);
+  }
+
+  /* 把当前表单内容写进浏览器存储（不跳转、不打断输入） */
+  function autosaveNow() {
+    var t = editTarget();
+    if (!t) return;
+    if (!applyTarget(t)) {
+      // 姓名为空这类情况：不覆盖旧数据，也不打扰用户
+      return;
+    }
+    if (!S.save()) {
+      setNote("自动保存失败：可能是图片太多超出浏览器容量", "bad");
+      return;
+    }
+    var c = pubCfg();
+    if (c.auto && c.token) {
+      setNote("已自动保存 " + clock() + " · 稍后自动发布");
+      schedulePublish();
+    } else {
+      setNote("已自动保存 " + clock(), "ok");
+    }
+  }
+
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(autosaveNow, 900);
+  }
+
   /* ---------------- 事件绑定 ---------------- */
 
   var TEMPLATES = { exp: expItem, photo: photoItem, video: videoItem };
 
   function bind() {
+    // 输入即自动保存
+    document.addEventListener("input", function (ev) {
+      if (!curRoute || curRoute.path !== "/admin") return;
+      var el = ev.target;
+      if (!el || !el.closest || !el.closest(".admin")) return;
+      if (el.closest('[data-action="import-json"]')) return;
+      scheduleSave();
+    });
+
     document.addEventListener("click", function (ev) {
       var btn = ev.target.closest("[data-action]");
       if (!btn) return;
       if (btn.tagName === "INPUT") return;
       var action = btn.getAttribute("data-action");
+
+      // 手动保存/发布时取消排队中的自动保存，避免重复提交
+      if (/^(save-|publish$)/.test(action)) {
+        clearTimeout(saveTimer);
+        clearTimeout(pubTimer);
+      }
 
       if (action === "add-repeat") {
         var target = document.querySelector(btn.getAttribute("data-target"));
@@ -774,11 +923,13 @@
         holder.innerHTML = TEMPLATES[tpl]({}, count);
         if (target.querySelector(".repeat-empty")) target.querySelector(".repeat-empty").remove();
         target.appendChild(holder.firstElementChild);
+        scheduleSave();
       }
 
       if (action === "del-repeat") {
         var item = btn.closest(".repeat-item");
         if (item) item.remove();
+        scheduleSave();
       }
 
       if (action === "clear-upload") {
@@ -947,6 +1098,7 @@
               }
             }
             if (nameEl) nameEl.textContent = "已上传（约 " + Math.round(dataUrl.length / 1365) + " KB）";
+            scheduleSave();
           })
           .catch(function () { if (nameEl) nameEl.textContent = "读取失败，换一张试试"; });
       }
@@ -958,6 +1110,7 @@
           .then(function () {
             hidden.value = "idb:" + key;
             if (nameEl) nameEl.textContent = "已存入本机 · " + file.name + "（" + (file.size / 1048576).toFixed(1) + " MB）";
+            scheduleSave();
             // 立即生成可播放地址
             return S.idbGet(key).then(function (blob) {
               S.blobURLs[key] = URL.createObjectURL(blob);

@@ -1564,6 +1564,31 @@ h1, h2, h3, h4 {
 }
 .admin-actions__note { margin-left: auto; color: var(--faint); font-size: 11px; letter-spacing: 0.06em; }
 
+/* 自动保存状态条 */
+.autosave-note {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: calc(100vw - 32px);
+  padding: 8px 18px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(11, 16, 14, 0.94);
+  backdrop-filter: blur(10px);
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.autosave-note[hidden] { display: none; }
+.autosave-note.is-ok { color: var(--gold); border-color: rgba(200, 170, 114, 0.34); }
+.autosave-note.is-bad { color: #d08a7a; border-color: rgba(208, 138, 122, 0.4); }
+
 .tag-input { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; background: var(--bg-deep); border: 1px solid var(--line); }
 .tag-input input { flex: 1; min-width: 100px; border: 0; background: none; outline: none; color: var(--ivory); font-size: 13px; }
 .tag-input .tag { display: inline-flex; align-items: center; gap: 6px; }
