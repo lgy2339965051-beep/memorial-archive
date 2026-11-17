@@ -1095,7 +1095,7 @@
 
       if (kind === "image") {
         if (nameEl) nameEl.textContent = "处理中…";
-        S.compressImage(file, 1600, 0.82)
+        S.compressImage(file, 1200, 0.78)
           .then(function (dataUrl) {
             hidden.value = dataUrl;
             var prev = box.querySelector("img.upload__preview");
