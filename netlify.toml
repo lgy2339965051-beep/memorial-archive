@@ -1,0 +1,26 @@
+# Netlify 部署配置：纯静态站，无需构建，直接发布仓库根目录
+[build]
+  publish = "."
+  command = ""
+
+# 内容文件不缓存，后台一发布就能看到最新版本
+[[headers]]
+  for = "/assets/data.js"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=600"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
